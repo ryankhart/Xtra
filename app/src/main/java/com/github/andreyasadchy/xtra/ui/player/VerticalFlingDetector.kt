@@ -25,7 +25,6 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
 
     private var downX = 0f
     private var downY = 0f
-    private var lastY = 0f
 
     // Where the current upward or downward stroke started: each moves to the last turning point.
     private var upStrokeStartY = 0f
@@ -46,7 +45,6 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         downY = y
         anchorX = x
         anchorY = y
-        lastY = y
         lastMoveTime = eventTime
         upStrokeStartY = y
         downStrokeStartY = y
@@ -70,7 +68,6 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
             anchorY = y
             lastMoveTime = eventTime
         }
-        lastY = y
         if (abs(x - downX) > touchSlop || abs(y - downY) > touchSlop) {
             leftSlop = true
         }
@@ -94,8 +91,9 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         val yVelocity = tracker.yVelocity
         return when {
             abs(yVelocity) < minVelocity || abs(yVelocity) <= abs(xVelocity) -> VerticalFling.NONE
-            yVelocity > 0 && lastY - downStrokeStartY > touchSlop -> VerticalFling.DOWN
-            yVelocity < 0 && upStrokeStartY - lastY > touchSlop -> VerticalFling.UP
+            // Strokes end at the last real movement (the anchor), so lift-off roll can't lengthen or shorten them.
+            yVelocity > 0 && anchorY - downStrokeStartY > touchSlop -> VerticalFling.DOWN
+            yVelocity < 0 && upStrokeStartY - anchorY > touchSlop -> VerticalFling.UP
             else -> VerticalFling.NONE
         }
     }

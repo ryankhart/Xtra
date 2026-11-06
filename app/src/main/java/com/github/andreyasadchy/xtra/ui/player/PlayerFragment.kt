@@ -109,7 +109,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var lastX = 0f
     private var lastY = 0f
     private var velocityTracker: VelocityTracker? = null
-    private var flingDetector: VerticalFlingDetector? = null
+    private lateinit var flingDetector: VerticalFlingDetector
     private var isTap = false
     private var tapEventTime = 0L
     private var startTranslationX = 0f
@@ -305,10 +305,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
             )
 
-            val flingDetector = VerticalFlingDetector(
+            flingDetector = VerticalFlingDetector(
                 minVelocity = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, FLING_VELOCITY_DP, resources.displayMetrics),
                 touchSlop = touchSlop.toFloat()
-            ).also { this@PlayerFragment.flingDetector = it }
+            )
 
             // Flicks are measured on the finger's position on screen, whether or not the player follows it. Event
             // coordinates are relative to where the player was when the event was dispatched. The result is offset
@@ -328,6 +328,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
                 if (includeCurrent) {
                     flingDetector.add(event.eventTime, toScreenX(event.getX(pointerIndex)), toScreenY(event.getY(pointerIndex)))
+                }
+                // Not a tap once the finger left the slop, even if the mini player didn't follow it vertically.
+                if (flingDetector.leftSlop) {
+                    isTap = false
                 }
             }
 
@@ -392,7 +396,19 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
             }
 
-            fun upAction(event: MotionEvent, verticalFling: VerticalFling = takeVerticalFling(event)) {
+            // The flick that will actually act: on the full player not while seeking, not from a status-bar swipe and
+            // not from a touch the player didn't follow past the slop (that one is handed to the controls as a tap);
+            // on the mini player only a flick up, and not in "move freely" mode, where upward drags reposition it.
+            fun actionableFling(fling: VerticalFling): VerticalFling = when {
+                fling == VerticalFling.NONE -> VerticalFling.NONE
+                isMaximized -> if (playerControls.progressBar.isPressed || statusBarSwipe || slidingLayout.translationY in touchSlopRange) VerticalFling.NONE else fling
+                fling == VerticalFling.UP && !moveFreely -> VerticalFling.UP
+                else -> VerticalFling.NONE
+            }
+
+            // Ends the gesture. `verticalFling` comes from takeVerticalFling, which ends the flick measurement.
+            fun upAction(event: MotionEvent, verticalFling: VerticalFling) {
+                val flick = actionableFling(verticalFling)
                 if (isMaximized) {
                     if (playerControls.progressBar.isPressed) {
                         playerControls.root.dispatchTouchEvent(event)
@@ -405,10 +421,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             }
                         }
                         val minimizeThreshold = slidingLayout.height / 5
-                        // A flick decides by its direction; without one, the drag distance decides as before. A touch
-                        // the player didn't follow past the slop was just handed to the controls as a tap, so it
-                        // can't also be a flick.
-                        val flick = if (statusBarSwipe || slidingLayout.translationY in touchSlopRange) VerticalFling.NONE else verticalFling
+                        // A flick decides by its direction; without one, the drag distance decides as before.
                         val shouldMinimize = when (flick) {
                             VerticalFling.DOWN -> true
                             VerticalFling.UP -> false
@@ -441,8 +454,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     velocityTracker?.recycle()
                     velocityTracker = null
                     when {
-                        // In "move freely" mode an upward drag repositions the mini player, so it never expands it.
-                        verticalFling == VerticalFling.UP && !moveFreely -> maximize()
+                        flick == VerticalFling.UP -> maximize()
                         xVelocity > 1500 -> {
                             isAnimating = true
                             slidingLayout.animate().apply {
@@ -600,9 +612,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                                 event.metaState
                                             )
                                         )
-                                        // Not a tap once the player or the finger moved past the slop; the mini
-                                        // player doesn't follow vertical moves unless it moves freely.
-                                        if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange || flingDetector.leftSlop)) {
+                                        if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange)) {
                                             isTap = false
                                         }
                                     }
@@ -612,10 +622,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         MotionEvent.ACTION_POINTER_UP -> {
                             val pointerIndex = event.actionIndex
                             val pointerId = event.getPointerId(pointerIndex)
-                            // The tracked finger flicked as it lifted: act on it rather than handing over to a
-                            // finger that was resting on the player.
+                            // The tracked finger flicked as it lifted and the flick will act: act on it rather than
+                            // handing over to a finger that was resting on the player.
                             val verticalFling = if (pointerId == activePointerId) takeVerticalFling(event) else VerticalFling.NONE
-                            if (verticalFling != VerticalFling.NONE) {
+                            if (actionableFling(verticalFling) != VerticalFling.NONE) {
                                 upAction(event, verticalFling)
                                 activePointerId = -1
                             } else if (pointerId == activePointerId) {
@@ -643,7 +653,12 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                 trackActivePointer(event)
                             }
                         }
-                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> upAction(event)
+                        MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                            // A finger left over after the gesture already ended (e.g. after a flick) does nothing.
+                            if (activePointerId != -1) {
+                                upAction(event, takeVerticalFling(event))
+                            }
+                        }
                     }
                 }
                 true
@@ -2458,8 +2473,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
     override fun onDestroyView() {
         super.onDestroyView()
-        flingDetector?.recycle()
-        flingDetector = null
+        if (::flingDetector.isInitialized) {
+            flingDetector.recycle()
+        }
         velocityTracker?.recycle()
         velocityTracker = null
         _binding = null
