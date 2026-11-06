@@ -318,7 +318,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
             // Follows the finger's on-screen position, so a vertical flick is judged by how fast the finger
             // was moving when it let go, whether or not the player itself follows the finger.
-            fun trackFling(event: MotionEvent, pointerIndex: Int, start: Boolean) {
+            fun trackFling(event: MotionEvent, pointerIndex: Int, start: Boolean, includeCurrent: Boolean = true) {
                 if (start) {
                     val tracker = flingTracker ?: VelocityTracker.obtain().also { flingTracker = it }
                     tracker.clear()
@@ -359,7 +359,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     for (h in 0 until event.historySize) {
                         add(event.getHistoricalEventTime(h), event.getHistoricalX(pointerIndex, h), event.getHistoricalY(pointerIndex, h), MotionEvent.ACTION_MOVE)
                     }
-                    add(event.eventTime, event.getX(pointerIndex), event.getY(pointerIndex), MotionEvent.ACTION_MOVE)
+                    if (includeCurrent) {
+                        add(event.eventTime, event.getX(pointerIndex), event.getY(pointerIndex), MotionEvent.ACTION_MOVE)
+                    }
                 }
             }
 
@@ -370,6 +372,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             // other way), so a tap is never also a flick and lift-off jitter can't flip the result.
             fun takeVerticalFling(event: MotionEvent): VerticalFling {
                 val tracker = flingTracker?.takeIf { flingTracking } ?: return VerticalFling.NONE
+                // Any positions bundled into the lift event are real movement; only its own point is left out.
+                event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { trackFling(event, it, start = false, includeCurrent = false) }
                 flingTracking = false
                 val stoppedBeforeLift = event.eventTime - flingLastMoveTime > FLING_STOPPED_MS
                 // FLAG_CANCELED marks a touch Android rejected (e.g. a palm) when it is lifted as a pointer-up.
@@ -385,6 +389,14 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     yVelocity > 0 && flingLastY - flingMinY > touchSlop -> VerticalFling.DOWN
                     yVelocity < 0 && flingMaxY - flingLastY > touchSlop -> VerticalFling.UP
                     else -> VerticalFling.NONE
+                }
+            }
+
+            // Records the tracked finger on every event, including other fingers landing or lifting, so its
+            // movement has no gaps.
+            fun trackActivePointer(event: MotionEvent) {
+                if (activePointerId != -1) {
+                    event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { trackFling(event, it, false) }
                 }
             }
 
@@ -566,16 +578,13 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                     statusBarSwipe = !isPortrait && y <= 100
                                     downAction(event, pointerIndex)
                                 }
+                            } else {
+                                trackActivePointer(event)
                             }
                         }
                         MotionEvent.ACTION_MOVE -> {
-                            if (activePointerId != -1) {
-                                // Before the player moves: the event's coordinates are relative to where the player was when it was dispatched.
-                                val flingPointerIndex = event.findPointerIndex(activePointerId)
-                                if (flingPointerIndex != -1) {
-                                    trackFling(event, flingPointerIndex, false)
-                                }
-                            }
+                            // Before the player moves: the event's coordinates are relative to where the player was when it was dispatched.
+                            trackActivePointer(event)
                             if (isMaximized) {
                                 playerControls.root.dispatchTouchEvent(event)
                                 if (!playerControls.progressBar.isPressed && !statusBarSwipe && activePointerId != -1) {
@@ -656,6 +665,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                     upAction(event)
                                 }
                                 activePointerId = newId
+                            } else {
+                                trackActivePointer(event)
                             }
                         }
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> upAction(event)
