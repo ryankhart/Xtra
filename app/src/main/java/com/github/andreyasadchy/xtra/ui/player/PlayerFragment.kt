@@ -115,12 +115,13 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var flingLastMoveTime = 0L
     private var flingDownX = 0f
     private var flingDownY = 0f
+    private var flingLeftSlop = false
     private var flingAnchorX = 0f
     private var flingAnchorY = 0f
     private var flingLastX = 0f
     private var flingLastY = 0f
-    private var flingMinY = 0f
-    private var flingMaxY = 0f
+    private var flingDownStrokeStartY = 0f
+    private var flingUpStrokeStartY = 0f
     private var isTap = false
     private var tapEventTime = 0L
     private var startTranslationX = 0f
@@ -332,15 +333,29 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 val sample = MotionEvent.obtain(event.downTime, eventTime, action, screenX, screenY, event.metaState)
                 tracker.addMovement(sample)
                 sample.recycle()
-                if (action == MotionEvent.ACTION_DOWN || abs(screenX - flingAnchorX) > flingJitter || abs(screenY - flingAnchorY) > flingJitter) {
+                if (action == MotionEvent.ACTION_DOWN) {
+                    flingUpStrokeStartY = screenY
+                    flingDownStrokeStartY = screenY
+                    flingAnchorX = screenX
+                    flingAnchorY = screenY
+                    flingLastMoveTime = eventTime
+                } else if (abs(screenX - flingAnchorX) > flingJitter || abs(screenY - flingAnchorY) > flingJitter) {
+                    // Real movement. Moving down, an upward stroke would start from here and vice versa, so each
+                    // stroke start ends up at the last turning point.
+                    if (screenY > flingAnchorY) {
+                        flingUpStrokeStartY = screenY
+                    } else if (screenY < flingAnchorY) {
+                        flingDownStrokeStartY = screenY
+                    }
                     flingAnchorX = screenX
                     flingAnchorY = screenY
                     flingLastMoveTime = eventTime
                 }
                 flingLastX = screenX
                 flingLastY = screenY
-                flingMinY = if (action == MotionEvent.ACTION_DOWN) screenY else minOf(flingMinY, screenY)
-                flingMaxY = if (action == MotionEvent.ACTION_DOWN) screenY else maxOf(flingMaxY, screenY)
+                if (abs(screenX - flingDownX) > touchSlop || abs(screenY - flingDownY) > touchSlop) {
+                    flingLeftSlop = true
+                }
             }
 
             fun startFling(event: MotionEvent, pointerIndex: Int) {
@@ -348,6 +363,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 flingTracking = true
                 flingDownX = toScreenX(event.getX(pointerIndex))
                 flingDownY = toScreenY(event.getY(pointerIndex))
+                flingLeftSlop = false
                 addFlingSample(event, event.eventTime, flingDownX, flingDownY, MotionEvent.ACTION_DOWN)
             }
 
@@ -363,8 +379,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
             }
 
-            // Whether the finger has moved past the touch slop from where it landed, even if the player didn't follow it.
-            fun fingerLeftSlop() = abs(flingLastX - flingDownX) > touchSlop || abs(flingLastY - flingDownY) > touchSlop
+            // Whether the finger has moved past the touch slop from where it landed at any point, including positions
+            // bundled into one event, even if the player didn't follow it.
+            fun fingerLeftSlop() = flingLeftSlop
 
             // Landscape: a swipe starting in the top edge zone reveals the status bar and must not move the player.
             fun inStatusBarZone(y: Float): Boolean {
@@ -379,9 +396,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
             // Judges the gesture by the finger's speed at release, not by how far it went. The lift event itself is
             // left out: it repeats the last position a frame later, which would read as a brief stop. A finger that
-            // really did stop before lifting is caught by the time since it last moved instead. The finger must
-            // also have travelled more than the touch slop in the flick's direction (from its furthest point the
-            // other way), so a tap is never also a flick and lift-off jitter can't flip the result.
+            // really did stop before lifting is caught by the time since it last moved instead. The finger's last
+            // stroke must also be longer than the touch slop in the flick's direction, so a tap or a final twitch is
+            // never a flick and lift-off jitter can't flip the result.
             fun takeVerticalFling(event: MotionEvent): VerticalFling {
                 val tracker = flingTracker?.takeIf { flingTracking } ?: return VerticalFling.NONE
                 // Any positions bundled into the lift event are real movement; only its own point is left out.
@@ -399,8 +416,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 val yVelocity = tracker.yVelocity
                 return when {
                     abs(yVelocity) < flingVelocity || abs(yVelocity) <= abs(xVelocity) -> VerticalFling.NONE
-                    yVelocity > 0 && flingLastY - flingMinY > touchSlop -> VerticalFling.DOWN
-                    yVelocity < 0 && flingMaxY - flingLastY > touchSlop -> VerticalFling.UP
+                    yVelocity > 0 && flingLastY - flingDownStrokeStartY > touchSlop -> VerticalFling.DOWN
+                    yVelocity < 0 && flingUpStrokeStartY - flingLastY > touchSlop -> VerticalFling.UP
                     else -> VerticalFling.NONE
                 }
             }
@@ -444,8 +461,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
             }
 
-            fun upAction(event: MotionEvent) {
-                val verticalFling = takeVerticalFling(event)
+            fun upAction(event: MotionEvent, verticalFling: VerticalFling = takeVerticalFling(event)) {
                 if (isMaximized) {
                     if (playerControls.progressBar.isPressed) {
                         playerControls.root.dispatchTouchEvent(event)
@@ -665,7 +681,13 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         MotionEvent.ACTION_POINTER_UP -> {
                             val pointerIndex = event.actionIndex
                             val pointerId = event.getPointerId(pointerIndex)
-                            if (pointerId == activePointerId) {
+                            // The tracked finger flicked as it lifted: act on it rather than handing over to a
+                            // finger that was resting on the player.
+                            val verticalFling = if (pointerId == activePointerId) takeVerticalFling(event) else VerticalFling.NONE
+                            if (verticalFling != VerticalFling.NONE) {
+                                upAction(event, verticalFling)
+                                activePointerId = -1
+                            } else if (pointerId == activePointerId) {
                                 var newId = -1
                                 for (i in 0 until event.pointerCount) {
                                     val id = event.getPointerId(i)
@@ -683,7 +705,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                     }
                                 }
                                 if (newId == -1) {
-                                    upAction(event)
+                                    upAction(event, verticalFling)
                                 }
                                 activePointerId = newId
                             } else {
@@ -698,7 +720,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             chatTouchView.setOnTouchListener { _, event ->
                 when (event.actionMasked) {
                     MotionEvent.ACTION_DOWN -> {
-                        chatStatusBarSwipe = !isPortrait && event.y <= 100
+                        chatStatusBarSwipe = inStatusBarZone(event.y)
                         chatLinearLayout.dispatchTouchEvent(event)
                     }
                     MotionEvent.ACTION_MOVE -> {
