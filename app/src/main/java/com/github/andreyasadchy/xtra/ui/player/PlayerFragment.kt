@@ -321,8 +321,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             // Smaller moves (a resting finger's jitter, the contact point rolling as it lifts) don't count as moving.
             val flingJitter = touchSlop / 4f
 
-            // Flicks are measured on the finger's on-screen position, whether or not the player follows it.
-            // Event coordinates are relative to where the player was when the event was dispatched.
+            // Flicks are measured on the finger's position on screen, whether or not the player follows it. Event
+            // coordinates are relative to where the player was when the event was dispatched. The result is offset
+            // by a constant while the player is scaled (the scale pivot is left out), so use it only for differences.
             fun toScreenX(x: Float) = x * slidingLayout.scaleX + slidingLayout.translationX
             fun toScreenY(y: Float) = y * slidingLayout.scaleY + slidingLayout.translationY
 
@@ -566,6 +567,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         }
                     }
                 }
+                // The gesture is over: a leftover finger lifting later (e.g. one that slid off the player during a
+                // flick) must not read as a tap on the mini player.
+                isTap = false
             }
 
             dragView.setOnTouchListener { _, event ->
@@ -2503,6 +2507,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         super.onDestroyView()
         flingTracker?.recycle()
         flingTracker = null
+        velocityTracker?.recycle()
+        velocityTracker = null
         _binding = null
     }
 
