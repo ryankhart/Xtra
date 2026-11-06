@@ -111,7 +111,14 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var lastY = 0f
     private var velocityTracker: VelocityTracker? = null
     private var flingTracker: VelocityTracker? = null
+    private var flingTracking = false
     private var flingLastMoveTime = 0L
+    private var flingDownX = 0f
+    private var flingDownY = 0f
+    private var flingLastX = 0f
+    private var flingLastY = 0f
+    private var flingMinY = 0f
+    private var flingMaxY = 0f
     private var isTap = false
     private var tapEventTime = 0L
     private var startTranslationX = 0f
@@ -313,24 +320,36 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             // was moving when it let go, whether or not the player itself follows the finger.
             fun trackFling(event: MotionEvent, pointerIndex: Int, start: Boolean) {
                 if (start) {
-                    flingTracker?.clear()
-                    if (flingTracker == null) {
-                        flingTracker = VelocityTracker.obtain()
-                    }
+                    val tracker = flingTracker ?: VelocityTracker.obtain().also { flingTracker = it }
+                    tracker.clear()
+                    flingTracking = true
                 }
-                val tracker = flingTracker ?: return
+                val tracker = flingTracker?.takeIf { flingTracking } ?: return
                 fun add(eventTime: Long, x: Float, y: Float, action: Int) {
-                    val sample = MotionEvent.obtain(
-                        event.downTime,
-                        eventTime,
-                        action,
-                        x * slidingLayout.scaleX + slidingLayout.translationX,
-                        y * slidingLayout.scaleY + slidingLayout.translationY,
-                        event.metaState
-                    )
+                    val screenX = x * slidingLayout.scaleX + slidingLayout.translationX
+                    val screenY = y * slidingLayout.scaleY + slidingLayout.translationY
+                    val sample = MotionEvent.obtain(event.downTime, eventTime, action, screenX, screenY, event.metaState)
                     tracker.addMovement(sample)
                     sample.recycle()
-                    flingLastMoveTime = eventTime
+                    if (action == MotionEvent.ACTION_DOWN) {
+                        flingLastMoveTime = eventTime
+                        flingDownX = screenX
+                        flingDownY = screenY
+                        flingMinY = screenY
+                        flingMaxY = screenY
+                    } else if (isTap && (abs(screenX - flingDownX) > touchSlop || abs(screenY - flingDownY) > touchSlop)) {
+                        // The finger itself moved, even if the mini player didn't follow it vertically: not a tap.
+                        isTap = false
+                    }
+                    if (action != MotionEvent.ACTION_DOWN && (abs(screenX - flingLastX) >= 1f || abs(screenY - flingLastY) >= 1f)) {
+                        // Only real movement counts; some screens keep reporting a resting finger (pressure or
+                        // contact-size changes), and so do other fingers moving while this one rests.
+                        flingLastMoveTime = eventTime
+                    }
+                    flingLastX = screenX
+                    flingLastY = screenY
+                    flingMinY = minOf(flingMinY, screenY)
+                    flingMaxY = maxOf(flingMaxY, screenY)
                 }
                 if (start) {
                     add(event.eventTime, event.getX(pointerIndex), event.getY(pointerIndex), MotionEvent.ACTION_DOWN)
@@ -344,26 +363,29 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
             }
 
-            // Returns 1 for a fast flick down, -1 for a fast flick up, 0 otherwise. Only the speed at release
-            // counts, not the distance. The lift event itself is left out: it repeats the last position a frame
-            // later, which would read as a brief stop. A finger that really did stop before lifting is caught by
-            // the time since its last movement instead.
-            fun takeVerticalFling(event: MotionEvent): Int {
-                val tracker = flingTracker ?: return 0
+            // Judges the gesture by the finger's speed at release, not by how far it went. The lift event itself is
+            // left out: it repeats the last position a frame later, which would read as a brief stop. A finger that
+            // really did stop before lifting is caught by the time since it last moved instead. The finger must
+            // also have travelled more than the touch slop in the flick's direction (from its furthest point the
+            // other way), so a tap is never also a flick and lift-off jitter can't flip the result.
+            fun takeVerticalFling(event: MotionEvent): VerticalFling {
+                val tracker = flingTracker?.takeIf { flingTracking } ?: return VerticalFling.NONE
+                flingTracking = false
                 val stoppedBeforeLift = event.eventTime - flingLastMoveTime > FLING_STOPPED_MS
-                val direction = if (event.actionMasked != MotionEvent.ACTION_CANCEL && !stoppedBeforeLift) {
-                    tracker.computeCurrentVelocity(1000)
-                    val xVelocity = tracker.xVelocity
-                    val yVelocity = tracker.yVelocity
-                    when {
-                        abs(yVelocity) < flingVelocity || abs(yVelocity) < abs(xVelocity) -> 0
-                        yVelocity > 0 -> 1
-                        else -> -1
-                    }
-                } else 0
-                tracker.recycle()
-                flingTracker = null
-                return direction
+                // FLAG_CANCELED marks a touch Android rejected (e.g. a palm) when it is lifted as a pointer-up.
+                val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and FLAG_CANCELED) != 0
+                if (canceled || stoppedBeforeLift) {
+                    return VerticalFling.NONE
+                }
+                tracker.computeCurrentVelocity(1000)
+                val xVelocity = tracker.xVelocity
+                val yVelocity = tracker.yVelocity
+                return when {
+                    abs(yVelocity) < flingVelocity || abs(yVelocity) < abs(xVelocity) -> VerticalFling.NONE
+                    yVelocity > 0 && flingLastY - flingMinY > touchSlop -> VerticalFling.DOWN
+                    yVelocity < 0 && flingMaxY - flingLastY > touchSlop -> VerticalFling.UP
+                    else -> VerticalFling.NONE
+                }
             }
 
             fun downAction(event: MotionEvent, pointerIndex: Int) {
@@ -411,8 +433,13 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             }
                         }
                         val minimizeThreshold = slidingLayout.height / 5
-                        val flungDown = verticalFling == 1 && !statusBarSwipe
-                        if (!flungDown && (verticalFling == -1 || slidingLayout.translationY < minimizeThreshold)) {
+                        // A flick decides by its direction; without one, the drag distance decides as before.
+                        val shouldMinimize = when (if (statusBarSwipe) VerticalFling.NONE else verticalFling) {
+                            VerticalFling.DOWN -> true
+                            VerticalFling.UP -> false
+                            VerticalFling.NONE -> slidingLayout.translationY >= minimizeThreshold
+                        }
+                        if (!shouldMinimize) {
                             moveAnimation = slidingLayout.animate().apply {
                                 translationX(0f)
                                 translationY(0f)
@@ -439,7 +466,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     velocityTracker?.recycle()
                     velocityTracker = null
                     when {
-                        verticalFling == -1 -> maximize()
+                        // In "move freely" mode an upward drag repositions the mini player, so it never expands it.
+                        verticalFling == VerticalFling.UP && !moveFreely -> maximize()
                         xVelocity > 1500 -> {
                             isAnimating = true
                             slidingLayout.animate().apply {
@@ -2450,11 +2478,15 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         _binding = null
     }
 
+    private enum class VerticalFling { NONE, UP, DOWN }
+
     companion object {
         // Release speed (dp per second) a vertical flick needs to minimize or maximize the player, however short it is.
         private const val FLING_VELOCITY_DP = 500f
         // A finger that hasn't moved for this long before lifting counts as stopped, not flicked (same as Android's own fling detection).
         private const val FLING_STOPPED_MS = 40L
+        // MotionEvent.FLAG_CANCELED (API 33); older versions never set it.
+        private const val FLAG_CANCELED = 0x20
         private const val REQUEST_CODE_QUALITY = 0
         private const val REQUEST_CODE_SPEED = 1
         private const val REQUEST_CODE_AUDIO_ONLY = 2
