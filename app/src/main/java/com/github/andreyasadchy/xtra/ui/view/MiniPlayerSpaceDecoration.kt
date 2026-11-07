@@ -61,7 +61,12 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
             // every item in the last row gets the same offset, otherwise the grid stretches the other items in that row
             val spanSizeLookup = layoutManager.spanSizeLookup
             val spanCount = layoutManager.spanCount
-            spanSizeLookup.getSpanGroupIndex(position, spanCount) == spanSizeLookup.getSpanGroupIndex(lastPosition, spanCount)
+            if (spanSizeLookup is GridLayoutManager.DefaultSpanSizeLookup) {
+                // the default lookup counts rows from the start of the list each time, every item takes one span here
+                position / spanCount == lastPosition / spanCount
+            } else {
+                spanSizeLookup.getSpanGroupIndex(position, spanCount) == spanSizeLookup.getSpanGroupIndex(lastPosition, spanCount)
+            }
         } else {
             position == lastPosition
         }

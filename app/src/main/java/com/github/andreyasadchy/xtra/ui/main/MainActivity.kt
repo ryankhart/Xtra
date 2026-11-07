@@ -1017,7 +1017,8 @@ class MainActivity : AppCompatActivity() {
             }
             parent = parent.parentFragment
         }
-        view.findViewById<RecyclerView>(R.id.recyclerView)?.let { recyclerView ->
+        // some fragments, like the emote picker, use a RecyclerView without an id as their whole view
+        ((view as? RecyclerView) ?: view.findViewById<RecyclerView?>(R.id.recyclerView))?.let { recyclerView ->
             if (miniPlayerSpaceLists.add(recyclerView)) {
                 recyclerView.addItemDecoration(miniPlayerSpaceDecoration)
             }
