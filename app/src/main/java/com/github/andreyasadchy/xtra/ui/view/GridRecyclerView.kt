@@ -42,6 +42,8 @@ class GridRecyclerView : RecyclerView {
         // rows change with the column count, so offsets that depend on the row (like the last row's space) need a refresh
         if (!isComputingLayout) {
             invalidateItemDecorations()
+        } else {
+            post { invalidateItemDecorations() }
         }
     }
 

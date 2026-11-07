@@ -32,7 +32,8 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
     /**
      * RecyclerView keeps the offsets of items that aren't rebound, so when items are added, removed or moved
      * the previous last row would keep its space and the new last row could miss it.
-     * Mark all offsets dirty before the layout that follows the change, so it's drawn correctly the first time.
+     * Mark all offsets dirty before the layout that follows the change, so it's drawn correctly the first time
+     * (getSpace handles the pre-layout pass of animated changes).
      */
     private fun observeAdapter(recyclerView: RecyclerView) {
         val adapter = recyclerView.adapter
@@ -127,8 +128,18 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
         if (layoutManager.orientation != RecyclerView.VERTICAL || layoutManager.reverseLayout) {
             return 0
         }
-        val position = parent.getChildLayoutPosition(view)
-        val lastPosition = state.itemCount - 1
+        // with an item animator, offsets refreshed after a change are computed in the pre-layout pass and reused by the
+        // real layout, but pre-layout positions and counts still describe the list before the change.
+        // Adapter positions already include the change, so use them there
+        val position: Int
+        val lastPosition: Int
+        if (state.isPreLayout) {
+            position = parent.getChildAdapterPosition(view)
+            lastPosition = (parent.adapter?.itemCount ?: 0) - 1
+        } else {
+            position = parent.getChildLayoutPosition(view)
+            lastPosition = state.itemCount - 1
+        }
         if (position < 0 || lastPosition < 0) {
             return 0
         }
