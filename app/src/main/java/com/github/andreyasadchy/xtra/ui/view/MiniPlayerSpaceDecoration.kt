@@ -20,6 +20,7 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
     private val appliedSpace = WeakHashMap<View, Int>()
     private val adapterObservers = WeakHashMap<RecyclerView, Pair<RecyclerView.Adapter<*>, RecyclerView.AdapterDataObserver>>()
     private val pendingInvalidations = Collections.newSetFromMap(WeakHashMap<RecyclerView, Boolean>())
+    private val detachListeners = Collections.newSetFromMap(WeakHashMap<RecyclerView, Boolean>())
 
     override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
         observeAdapter(parent)
@@ -62,6 +63,20 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
         }
         adapter.registerAdapterDataObserver(observer)
         adapterObservers[recyclerView] = adapter to observer
+        if (detachListeners.add(recyclerView)) {
+            // the map value holds the adapter, and adapters can hold their RecyclerView (like PagedListFragment's observer),
+            // so the weak key alone wouldn't let a destroyed list be collected. Forget the adapter when the list leaves
+            // the screen, it's observed again on its next layout
+            recyclerView.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+                override fun onViewAttachedToWindow(v: View) {}
+
+                override fun onViewDetachedFromWindow(v: View) {
+                    adapterObservers.remove(recyclerView)?.let { (oldAdapter, oldObserver) ->
+                        oldAdapter.unregisterAdapterDataObserver(oldObserver)
+                    }
+                }
+            })
+        }
     }
 
     private fun invalidateItemDecorations(recyclerView: RecyclerView) {
