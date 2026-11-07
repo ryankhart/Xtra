@@ -22,6 +22,7 @@ class GridRecyclerView : RecyclerView {
     private val landscapeColumns = prefs.getString(C.LANDSCAPE_COLUMN_COUNT, "2")!!.toInt()
 
     private val gridLayoutManager: GridLayoutManager
+    private var dividerDecoration: ItemDecoration? = null
 
     init {
         val columns = getColumnsForConfiguration(resources.configuration)
@@ -32,9 +33,9 @@ class GridRecyclerView : RecyclerView {
 
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        if (!material3) {
-            removeItemDecorationAt(0)
-        }
+        // remove by reference, other decorations (like the minimized player space) may be added to this view too
+        dividerDecoration?.let { removeItemDecoration(it) }
+        dividerDecoration = null
         val columns = getColumnsForConfiguration(newConfig)
         gridLayoutManager.spanCount = columns
         addItemDecoration(columns)
@@ -50,13 +51,14 @@ class GridRecyclerView : RecyclerView {
 
     private fun addItemDecoration(columns: Int) {
         if (!material3) {
-            addItemDecoration(
-                if (columns <= 1) {
-                    DividerItemDecoration(context, GridLayoutManager.VERTICAL)
-                } else {
-                    MarginItemDecoration(context.resources.getDimension(R.dimen.divider_margin).toInt(), columns)
-                }
-            )
+            val decoration = if (columns <= 1) {
+                DividerItemDecoration(context, GridLayoutManager.VERTICAL)
+            } else {
+                MarginItemDecoration(context.resources.getDimension(R.dimen.divider_margin).toInt(), columns)
+            }
+            // keep the divider first so it's drawn the same way as before
+            addItemDecoration(decoration, 0)
+            dividerDecoration = decoration
         }
     }
 }

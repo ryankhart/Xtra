@@ -43,6 +43,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
+import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
 import androidx.fragment.app.FragmentTransaction
@@ -57,6 +58,7 @@ import androidx.navigation.NavController
 import androidx.navigation.fragment.NavHostFragment
 import androidx.navigation.ui.NavigationUI
 import androidx.navigation.ui.setupWithNavController
+import androidx.recyclerview.widget.RecyclerView
 import androidx.work.Constraints
 import androidx.work.ExistingPeriodicWorkPolicy
 import androidx.work.NetworkType
@@ -88,6 +90,7 @@ import com.github.andreyasadchy.xtra.ui.saved.SavedPagerFragment
 import com.github.andreyasadchy.xtra.ui.saved.downloads.DownloadsFragment
 import com.github.andreyasadchy.xtra.ui.team.TeamFragmentDirections
 import com.github.andreyasadchy.xtra.ui.top.TopStreamsFragmentDirections
+import com.github.andreyasadchy.xtra.ui.view.MiniPlayerSpaceDecoration
 import com.github.andreyasadchy.xtra.util.C
 import com.github.andreyasadchy.xtra.util.TwitchApiHelper
 import com.github.andreyasadchy.xtra.util.applyTheme
@@ -98,7 +101,9 @@ import com.google.android.material.color.MaterialColors
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import org.chromium.net.CronetProvider
+import java.util.Collections
 import java.util.Timer
+import java.util.WeakHashMap
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.schedule
 
@@ -129,11 +134,22 @@ class MainActivity : AppCompatActivity() {
     var logoutResultLauncher: ActivityResultLauncher<Intent>? = null
     private var updateDownloadDialogBinding: DialogUpdateDownloadBinding? = null
     private var updateDownloadDialog: AlertDialog? = null
+    private var miniPlayerSpace = 0
+    private val miniPlayerSpaceDecoration = MiniPlayerSpaceDecoration { miniPlayerSpace }
+    private val miniPlayerSpaceLists = Collections.newSetFromMap(WeakHashMap<RecyclerView, Boolean>())
 
     //Lifecycle methods
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        supportFragmentManager.registerFragmentLifecycleCallbacks(
+            object : FragmentManager.FragmentLifecycleCallbacks() {
+                override fun onFragmentViewCreated(fm: FragmentManager, f: Fragment, v: View, savedInstanceState: Bundle?) {
+                    addMiniPlayerSpace(f, v)
+                }
+            },
+            true
+        )
         prefs = prefs()
         migrateSettings()
         if (tokenPrefs().getLong(C.UPDATE_LAST_CHECKED, 0) <= 0L) {
@@ -993,6 +1009,31 @@ class MainActivity : AppCompatActivity() {
 
 //Player methods
 
+    private fun addMiniPlayerSpace(fragment: Fragment, view: View) {
+        var parent: Fragment? = fragment
+        while (parent != null) {
+            if (parent is PlayerFragment || parent is DialogFragment) {
+                return
+            }
+            parent = parent.parentFragment
+        }
+        view.findViewById<RecyclerView>(R.id.recyclerView)?.let { recyclerView ->
+            if (miniPlayerSpaceLists.add(recyclerView)) {
+                recyclerView.addItemDecoration(miniPlayerSpaceDecoration)
+            }
+        }
+    }
+
+    /**
+     * Space the minimized player needs at the bottom of lists, or 0 when it isn't shown.
+     */
+    fun setMiniPlayerSpace(space: Int) {
+        if (miniPlayerSpace != space) {
+            miniPlayerSpace = space
+            miniPlayerSpaceLists.forEach { it.invalidateItemDecorations() }
+        }
+    }
+
     private fun startPlayer(fragment: Fragment) {
         playerFragment = fragment
         supportFragmentManager.beginTransaction()
@@ -1012,6 +1053,7 @@ class MainActivity : AppCompatActivity() {
             .remove(supportFragmentManager.findFragmentById(R.id.playerContainer)!!)
             .commit()
         playerFragment = null
+        setMiniPlayerSpace(0)
         viewModel.isPlayerOpened = false
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && packageManager.hasSystemFeature(PackageManager.FEATURE_PICTURE_IN_PICTURE)) {
             setPictureInPictureParams(PictureInPictureParams.Builder().setAutoEnterEnabled(false).build())
