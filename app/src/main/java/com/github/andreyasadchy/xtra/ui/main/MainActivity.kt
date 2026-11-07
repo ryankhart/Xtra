@@ -43,6 +43,8 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.isVisible
 import androidx.core.view.updateLayoutParams
+import androidx.core.view.updatePadding
+import androidx.core.widget.NestedScrollView
 import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.Fragment
 import androidx.fragment.app.FragmentManager
@@ -137,6 +139,8 @@ class MainActivity : AppCompatActivity() {
     private var miniPlayerSpace = 0
     private val miniPlayerSpaceDecoration = MiniPlayerSpaceDecoration { miniPlayerSpace }
     private val miniPlayerSpaceLists = Collections.newSetFromMap(WeakHashMap<RecyclerView, Boolean>())
+    // content of scrolling pages and its original bottom padding
+    private val miniPlayerSpaceScrollContents = WeakHashMap<View, Int>()
 
     //Lifecycle methods
 
@@ -1017,6 +1021,17 @@ class MainActivity : AppCompatActivity() {
             }
             parent = parent.parentFragment
         }
+        if (view is NestedScrollView) {
+            // a scrolling page (like a channel's About tab) may end with a list that's empty or has nothing to do with
+            // the rest of the page, so pad the whole page instead of the list
+            view.getChildAt(0)?.let { content ->
+                if (!miniPlayerSpaceScrollContents.containsKey(content)) {
+                    miniPlayerSpaceScrollContents[content] = content.paddingBottom
+                    content.updatePadding(bottom = content.paddingBottom + miniPlayerSpace)
+                }
+            }
+            return
+        }
         // some fragments, like the emote picker, use a RecyclerView without an id as their whole view
         ((view as? RecyclerView) ?: view.findViewById<RecyclerView?>(R.id.recyclerView))?.let { recyclerView ->
             if (miniPlayerSpaceLists.add(recyclerView)) {
@@ -1032,6 +1047,7 @@ class MainActivity : AppCompatActivity() {
         if (miniPlayerSpace != space) {
             miniPlayerSpace = space
             miniPlayerSpaceLists.forEach { it.invalidateItemDecorations() }
+            miniPlayerSpaceScrollContents.forEach { (content, paddingBottom) -> content.updatePadding(bottom = paddingBottom + space) }
         }
     }
 
