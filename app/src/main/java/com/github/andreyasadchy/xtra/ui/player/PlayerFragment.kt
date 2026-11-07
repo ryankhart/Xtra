@@ -329,7 +329,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 if (includeCurrent) {
                     flingDetector.add(event.eventTime, toScreenX(event.getX(pointerIndex)), toScreenY(event.getY(pointerIndex)))
                 }
-                // Not a tap once the finger left the slop, even if the mini player didn't follow it vertically.
+            }
+
+            // Not a tap once the finger left the slop, even if the mini player didn't follow it vertically.
+            fun endTapIfMoved() {
                 if (flingDetector.leftSlop) {
                     isTap = false
                 }
@@ -351,6 +354,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 if (!flingDetector.isTracking) return VerticalFling.NONE
                 // Any positions bundled into the lift event are real movement; only its own point is left out.
                 event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { addFlingSamples(event, it, includeCurrent = false) }
+                endTapIfMoved()
                 // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
                 @SuppressLint("InlinedApi")
                 val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
@@ -362,6 +366,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             fun trackActivePointer(event: MotionEvent) {
                 if (activePointerId != -1) {
                     event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { addFlingSamples(event, it) }
+                    endTapIfMoved()
                 }
             }
 
@@ -406,9 +411,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 else -> VerticalFling.NONE
             }
 
-            // Ends the gesture. `verticalFling` comes from takeVerticalFling, which ends the flick measurement.
-            fun upAction(event: MotionEvent, verticalFling: VerticalFling) {
-                val flick = actionableFling(verticalFling)
+            // Ends the gesture. `flick` is the result of actionableFling(takeVerticalFling(event)), or NONE.
+            fun upAction(event: MotionEvent, flick: VerticalFling) {
                 if (isMaximized) {
                     if (playerControls.progressBar.isPressed) {
                         playerControls.root.dispatchTouchEvent(event)
@@ -624,9 +628,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             val pointerId = event.getPointerId(pointerIndex)
                             // The tracked finger flicked as it lifted and the flick will act: act on it rather than
                             // handing over to a finger that was resting on the player.
-                            val verticalFling = if (pointerId == activePointerId) takeVerticalFling(event) else VerticalFling.NONE
-                            if (actionableFling(verticalFling) != VerticalFling.NONE) {
-                                upAction(event, verticalFling)
+                            val flick = if (pointerId == activePointerId) actionableFling(takeVerticalFling(event)) else VerticalFling.NONE
+                            if (flick != VerticalFling.NONE) {
+                                upAction(event, flick)
                                 activePointerId = -1
                             } else if (pointerId == activePointerId) {
                                 var newId = -1
@@ -646,7 +650,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                     }
                                 }
                                 if (newId == -1) {
-                                    upAction(event, verticalFling)
+                                    upAction(event, VerticalFling.NONE)
                                 }
                                 activePointerId = newId
                             } else {
@@ -656,7 +660,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                             // A finger left over after the gesture already ended (e.g. after a flick) does nothing.
                             if (activePointerId != -1) {
-                                upAction(event, takeVerticalFling(event))
+                                upAction(event, actionableFling(takeVerticalFling(event)))
                             }
                         }
                     }

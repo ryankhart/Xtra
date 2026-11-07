@@ -26,9 +26,12 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
     private var downX = 0f
     private var downY = 0f
 
-    // Where the current upward or downward stroke started: each moves to the last turning point.
-    private var upStrokeStartY = 0f
-    private var downStrokeStartY = 0f
+    // The current stroke: its direction (1 down, -1 up, 0 not yet moved), where it started and the furthest point
+    // it reached. It only turns once the finger comes back more than the touch slop from that furthest point, so
+    // lift-off roll or a wobble can't restart it.
+    private var strokeDirection = 0
+    private var strokeStartY = 0f
+    private var strokeExtremeY = 0f
 
     var isTracking = false
         private set
@@ -46,8 +49,9 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         anchorX = x
         anchorY = y
         lastMoveTime = eventTime
-        upStrokeStartY = y
-        downStrokeStartY = y
+        strokeDirection = 0
+        strokeStartY = y
+        strokeExtremeY = y
         leftSlop = false
         addToTracker(eventTime, x, y, MotionEvent.ACTION_DOWN)
     }
@@ -58,12 +62,7 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         // Only real movement counts as still moving; some screens keep reporting a resting finger, and other
         // fingers' moves report this one too.
         if (abs(x - anchorX) > jitter || abs(y - anchorY) > jitter) {
-            // Moving down, an upward stroke would start from here, and vice versa.
-            if (y > anchorY) {
-                upStrokeStartY = y
-            } else if (y < anchorY) {
-                downStrokeStartY = y
-            }
+            updateStroke(y)
             anchorX = x
             anchorY = y
             lastMoveTime = eventTime
@@ -76,9 +75,8 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
     /**
      * Ends the gesture and returns its flick, if any. The lift event's own position must not be added: it
      * repeats the last position a frame later, which would read as a brief stop. A finger that really did stop
-     * before lifting is caught by the time since it last moved instead. The last stroke must also be longer
-     * than the touch slop in the flick's direction, so a tap or a final twitch is never a flick and lift-off
-     * jitter can't flip the result.
+     * before lifting is caught by the time since it last moved instead. The last stroke must also run in the
+     * flick's direction and be longer than the touch slop, so a tap or a final twitch is never a flick.
      */
     fun finish(liftTime: Long, canceled: Boolean): VerticalFling {
         val tracker = tracker?.takeIf { isTracking } ?: return VerticalFling.NONE
@@ -91,10 +89,27 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         val yVelocity = tracker.yVelocity
         return when {
             abs(yVelocity) < minVelocity || abs(yVelocity) <= abs(xVelocity) -> VerticalFling.NONE
-            // Strokes end at the last real movement (the anchor), so lift-off roll can't lengthen or shorten them.
-            yVelocity > 0 && anchorY - downStrokeStartY > touchSlop -> VerticalFling.DOWN
-            yVelocity < 0 && upStrokeStartY - anchorY > touchSlop -> VerticalFling.UP
+            abs(strokeExtremeY - strokeStartY) <= touchSlop -> VerticalFling.NONE
+            yVelocity > 0 && strokeDirection == 1 -> VerticalFling.DOWN
+            yVelocity < 0 && strokeDirection == -1 -> VerticalFling.UP
             else -> VerticalFling.NONE
+        }
+    }
+
+    private fun updateStroke(y: Float) {
+        when {
+            strokeDirection == 0 -> if (y != strokeStartY) {
+                strokeDirection = if (y > strokeStartY) 1 else -1
+                strokeExtremeY = y
+            }
+            // Further in the same direction.
+            (y - strokeExtremeY) * strokeDirection > 0 -> strokeExtremeY = y
+            // Came back more than the slop: a new stroke starts at the turning point.
+            (strokeExtremeY - y) * strokeDirection > touchSlop -> {
+                strokeDirection = -strokeDirection
+                strokeStartY = strokeExtremeY
+                strokeExtremeY = y
+            }
         }
     }
 
