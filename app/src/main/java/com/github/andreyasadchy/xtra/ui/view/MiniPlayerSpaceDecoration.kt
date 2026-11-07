@@ -6,6 +6,8 @@ import android.view.View
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.recyclerview.widget.RecyclerView
+import java.lang.ref.WeakReference
+import java.util.Collections
 import java.util.WeakHashMap
 
 /**
@@ -16,20 +18,71 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
 
     // space each item view was last given, see onDraw
     private val appliedSpace = WeakHashMap<View, Int>()
+    private val adapterObservers = WeakHashMap<RecyclerView, Pair<RecyclerView.Adapter<*>, RecyclerView.AdapterDataObserver>>()
+    private val pendingInvalidations = Collections.newSetFromMap(WeakHashMap<RecyclerView, Boolean>())
 
     override fun getItemOffsets(outRect: Rect, view: View, parent: RecyclerView, state: RecyclerView.State) {
+        observeAdapter(parent)
         val extraSpace = getSpace(view, parent, state)
         appliedSpace[view] = extraSpace
         outRect.bottom = extraSpace
     }
 
-    override fun onDraw(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
-        // RecyclerView keeps the offsets of items that weren't rebound, so after items are added, removed or moved
-        // the previous last row could keep its space, or the new last row could miss it, until offsets are refreshed.
-        // Views animating out keep stale positions, so wait until animations finish (removing them redraws the list)
-        if (parent.itemAnimator?.isRunning == true) {
+    /**
+     * RecyclerView keeps the offsets of items that aren't rebound, so when items are added, removed or moved
+     * the previous last row would keep its space and the new last row could miss it.
+     * Mark all offsets dirty before the layout that follows the change, so it's drawn correctly the first time.
+     */
+    private fun observeAdapter(recyclerView: RecyclerView) {
+        val adapter = recyclerView.adapter
+        val current = adapterObservers[recyclerView]
+        if (current?.first === adapter) {
             return
         }
+        current?.let { (oldAdapter, observer) -> oldAdapter.unregisterAdapterDataObserver(observer) }
+        if (adapter == null) {
+            adapterObservers.remove(recyclerView)
+            return
+        }
+        val recyclerViewRef = WeakReference(recyclerView)
+        val observer = object : RecyclerView.AdapterDataObserver() {
+            override fun onChanged() = invalidate()
+            override fun onItemRangeInserted(positionStart: Int, itemCount: Int) = invalidate()
+            override fun onItemRangeRemoved(positionStart: Int, itemCount: Int) = invalidate()
+            override fun onItemRangeMoved(fromPosition: Int, toPosition: Int, itemCount: Int) = invalidate()
+
+            private fun invalidate() {
+                val view = recyclerViewRef.get()
+                if (view == null) {
+                    adapter.unregisterAdapterDataObserver(this)
+                } else if (space() > 0) {
+                    invalidateItemDecorations(view)
+                }
+            }
+        }
+        adapter.registerAdapterDataObserver(observer)
+        adapterObservers[recyclerView] = adapter to observer
+    }
+
+    private fun invalidateItemDecorations(recyclerView: RecyclerView) {
+        if (!recyclerView.isComputingLayout) {
+            recyclerView.invalidateItemDecorations()
+        } else if (pendingInvalidations.add(recyclerView)) {
+            recyclerView.post {
+                pendingInvalidations.remove(recyclerView)
+                recyclerView.invalidateItemDecorations()
+            }
+        }
+    }
+
+    override fun onDraw(c: Canvas, parent: RecyclerView, state: RecyclerView.State) {
+        // backstop for anything the adapter observer doesn't catch, like an adapter swapped in after the last layout.
+        // Views animating out keep stale positions, so wait until animations finish (removing them redraws the list).
+        // When the space is 0, MainActivity.setMiniPlayerSpace has already refreshed every list
+        if (space() <= 0 || parent.itemAnimator?.isRunning == true || parent in pendingInvalidations) {
+            return
+        }
+        observeAdapter(parent)
         for (i in 0 until parent.childCount) {
             val child = parent.getChildAt(i)
             val layoutParams = child.layoutParams as? RecyclerView.LayoutParams ?: continue
@@ -37,7 +90,11 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
                 continue
             }
             if ((appliedSpace[child] ?: 0) != getSpace(child, parent, state)) {
-                parent.post { parent.invalidateItemDecorations() }
+                pendingInvalidations.add(parent)
+                parent.post {
+                    pendingInvalidations.remove(parent)
+                    parent.invalidateItemDecorations()
+                }
                 return
             }
         }
