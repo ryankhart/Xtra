@@ -358,7 +358,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
                 @SuppressLint("InlinedApi")
                 val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
-                return flingDetector.finish(event.eventTime, canceled)
+                // On the full player a brisk tap on the controls can slide past the slop; ask a little more there.
+                return flingDetector.finish(event.eventTime, canceled, firstStrokeMin = if (isMaximized) touchSlop * 2f else touchSlop.toFloat())
             }
 
             // Records the tracked finger on every event, including other fingers landing or lifting, so its

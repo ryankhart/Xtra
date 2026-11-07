@@ -32,6 +32,7 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
     private var strokeDirection = 0
     private var strokeStartY = 0f
     private var strokeExtremeY = 0f
+    private var strokeTurned = false
 
     var isTracking = false
         private set
@@ -52,6 +53,7 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         strokeDirection = 0
         strokeStartY = y
         strokeExtremeY = y
+        strokeTurned = false
         leftSlop = false
         addToTracker(eventTime, x, y, MotionEvent.ACTION_DOWN)
     }
@@ -77,8 +79,10 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
      * repeats the last position a frame later, which would read as a brief stop. A finger that really did stop
      * before lifting is caught by the time since it last moved instead. The last stroke must also run in the
      * flick's direction and be longer than the touch slop, so a tap or a final twitch is never a flick.
+     * `firstStrokeMin` raises that minimum for a gesture that never turned, where a tap that slides is likelier
+     * than a flick; a stroke after a turn is always judged against the touch slop.
      */
-    fun finish(liftTime: Long, canceled: Boolean): VerticalFling {
+    fun finish(liftTime: Long, canceled: Boolean, firstStrokeMin: Float = touchSlop): VerticalFling {
         val tracker = tracker?.takeIf { isTracking } ?: return VerticalFling.NONE
         isTracking = false
         if (canceled || liftTime - lastMoveTime > STOPPED_MS) {
@@ -89,7 +93,7 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
         val yVelocity = tracker.yVelocity
         return when {
             abs(yVelocity) < minVelocity || abs(yVelocity) <= abs(xVelocity) -> VerticalFling.NONE
-            abs(strokeExtremeY - strokeStartY) <= touchSlop -> VerticalFling.NONE
+            abs(strokeExtremeY - strokeStartY) <= if (strokeTurned) touchSlop else firstStrokeMin -> VerticalFling.NONE
             yVelocity > 0 && strokeDirection == 1 -> VerticalFling.DOWN
             yVelocity < 0 && strokeDirection == -1 -> VerticalFling.UP
             else -> VerticalFling.NONE
@@ -107,6 +111,7 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
             // Came back more than the slop: a new stroke starts at the turning point.
             (strokeExtremeY - y) * strokeDirection > touchSlop -> {
                 strokeDirection = -strokeDirection
+                strokeTurned = true
                 strokeStartY = strokeExtremeY
                 strokeExtremeY = y
             }
