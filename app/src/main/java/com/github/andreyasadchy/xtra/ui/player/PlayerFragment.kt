@@ -358,7 +358,11 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             fun takeVerticalFling(event: MotionEvent): VerticalFling {
                 if (!flingDetector.isTracking) return VerticalFling.NONE
                 // Any positions bundled into the lift event are real movement; only its own point is left out.
-                event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { addFlingSamples(event, it, includeCurrent = false) }
+                event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let {
+                    addFlingSamples(event, it, includeCurrent = false)
+                    // The lift point still decides whether the finger left the slop, so a slow swipe isn't a tap.
+                    flingDetector.checkSlop(toScreenX(event.getX(it)), toScreenY(event.getY(it)))
+                }
                 endTapIfMoved()
                 // On the full player a brisk tap on the controls can slide past the slop; ask a little more there.
                 return flingDetector.finish(event.eventTime, isCanceled(event), firstStrokeMin = if (isMaximized) touchSlop * 2f else touchSlop.toFloat())
@@ -572,7 +576,10 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             // Before the player moves: the event's coordinates are relative to where the player was when it was dispatched.
                             trackActivePointer(event)
                             if (isMaximized) {
-                                playerControls.root.dispatchTouchEvent(event)
+                                // A finger left over after the gesture ended (e.g. after a flick) has no down on the controls.
+                                if (activePointerId != -1) {
+                                    playerControls.root.dispatchTouchEvent(event)
+                                }
                                 if (!playerControls.progressBar.isPressed && !statusBarSwipe && activePointerId != -1) {
                                     val pointerIndex = event.findPointerIndex(activePointerId)
                                     if (pointerIndex != -1) {

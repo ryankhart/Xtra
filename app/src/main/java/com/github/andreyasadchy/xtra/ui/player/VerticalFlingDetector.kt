@@ -69,7 +69,12 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
             anchorY = y
             lastMoveTime = eventTime
         }
-        if (abs(x - downX) > touchSlop || abs(y - downY) > touchSlop) {
+        checkSlop(x, y)
+    }
+
+    /** Records whether a position is past the touch slop, without adding it to the speed measurement (for the lift point). */
+    fun checkSlop(x: Float, y: Float) {
+        if (isTracking && (abs(x - downX) > touchSlop || abs(y - downY) > touchSlop)) {
             leftSlop = true
         }
     }
