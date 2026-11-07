@@ -1046,7 +1046,7 @@ class MainActivity : AppCompatActivity() {
     fun setMiniPlayerSpace(space: Int) {
         if (miniPlayerSpace != space) {
             miniPlayerSpace = space
-            miniPlayerSpaceLists.forEach { it.invalidateItemDecorations() }
+            miniPlayerSpaceLists.forEach { miniPlayerSpaceDecoration.invalidateItemDecorations(it) }
             miniPlayerSpaceScrollContents.forEach { (content, paddingBottom) -> content.updatePadding(bottom = paddingBottom + space) }
         }
     }

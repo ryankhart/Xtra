@@ -79,7 +79,10 @@ class MiniPlayerSpaceDecoration(private val space: () -> Int) : RecyclerView.Ite
         }
     }
 
-    private fun invalidateItemDecorations(recyclerView: RecyclerView) {
+    /**
+     * Refreshes the offsets of a list, now or after its current layout if it's in the middle of one.
+     */
+    fun invalidateItemDecorations(recyclerView: RecyclerView) {
         if (!recyclerView.isComputingLayout) {
             recyclerView.invalidateItemDecorations()
         } else if (pendingInvalidations.add(recyclerView)) {

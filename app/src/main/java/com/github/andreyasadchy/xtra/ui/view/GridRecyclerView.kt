@@ -39,6 +39,10 @@ class GridRecyclerView : RecyclerView {
         val columns = getColumnsForConfiguration(newConfig)
         gridLayoutManager.spanCount = columns
         addItemDecoration(columns)
+        // rows change with the column count, so offsets that depend on the row (like the last row's space) need a refresh
+        if (!isComputingLayout) {
+            invalidateItemDecorations()
+        }
     }
 
     private fun getColumnsForConfiguration(configuration: Configuration): Int {
