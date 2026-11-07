@@ -349,23 +349,16 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 return y <= max(100, zone)
             }
 
-            // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
-            @SuppressLint("InlinedApi")
-            fun isCanceled(event: MotionEvent) =
-                event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
-
             // Ends the tracked finger's gesture and returns its flick, if any.
             fun takeVerticalFling(event: MotionEvent): VerticalFling {
                 if (!flingDetector.isTracking) return VerticalFling.NONE
                 // Any positions bundled into the lift event are real movement; only its own point is left out.
-                event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let {
-                    addFlingSamples(event, it, includeCurrent = false)
-                    // The lift point still decides whether the finger left the slop, so a slow swipe isn't a tap.
-                    flingDetector.checkSlop(toScreenX(event.getX(it)), toScreenY(event.getY(it)))
-                }
+                event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { addFlingSamples(event, it, includeCurrent = false) }
                 endTapIfMoved()
-                // On the full player a brisk tap on the controls can slide past the slop; ask a little more there.
-                return flingDetector.finish(event.eventTime, isCanceled(event), firstStrokeMin = if (isMaximized) touchSlop * 2f else touchSlop.toFloat())
+                // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
+                @SuppressLint("InlinedApi")
+                val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
+                return flingDetector.finish(event.eventTime, canceled)
             }
 
             // Records the tracked finger on every event, including other fingers landing or lifting, so its
@@ -487,8 +480,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             (activity as? MainActivity)?.closePlayer()
                         }
                         else -> {
-                            // A touch Android canceled or rejected is not a tap.
-                            if (isTap && !isCanceled(event) && (event.eventTime - tapEventTime) < longPressTimeout) {
+                            if (isTap && (event.eventTime - tapEventTime) < longPressTimeout) {
                                 maximize()
                             } else {
                                 if (moveFreely) {
@@ -576,10 +568,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             // Before the player moves: the event's coordinates are relative to where the player was when it was dispatched.
                             trackActivePointer(event)
                             if (isMaximized) {
-                                // A finger left over after the gesture ended (e.g. after a flick) has no down on the controls.
-                                if (activePointerId != -1) {
-                                    playerControls.root.dispatchTouchEvent(event)
-                                }
+                                playerControls.root.dispatchTouchEvent(event)
                                 if (!playerControls.progressBar.isPressed && !statusBarSwipe && activePointerId != -1) {
                                     val pointerIndex = event.findPointerIndex(activePointerId)
                                     if (pointerIndex != -1) {
