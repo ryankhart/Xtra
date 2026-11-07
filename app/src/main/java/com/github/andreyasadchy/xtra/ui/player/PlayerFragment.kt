@@ -349,17 +349,19 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 return y <= max(100, zone)
             }
 
+            // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
+            @SuppressLint("InlinedApi")
+            fun isCanceled(event: MotionEvent) =
+                event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
+
             // Ends the tracked finger's gesture and returns its flick, if any.
             fun takeVerticalFling(event: MotionEvent): VerticalFling {
                 if (!flingDetector.isTracking) return VerticalFling.NONE
                 // Any positions bundled into the lift event are real movement; only its own point is left out.
                 event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { addFlingSamples(event, it, includeCurrent = false) }
                 endTapIfMoved()
-                // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
-                @SuppressLint("InlinedApi")
-                val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
                 // On the full player a brisk tap on the controls can slide past the slop; ask a little more there.
-                return flingDetector.finish(event.eventTime, canceled, firstStrokeMin = if (isMaximized) touchSlop * 2f else touchSlop.toFloat())
+                return flingDetector.finish(event.eventTime, isCanceled(event), firstStrokeMin = if (isMaximized) touchSlop * 2f else touchSlop.toFloat())
             }
 
             // Records the tracked finger on every event, including other fingers landing or lifting, so its
@@ -481,7 +483,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             (activity as? MainActivity)?.closePlayer()
                         }
                         else -> {
-                            if (isTap && (event.eventTime - tapEventTime) < longPressTimeout) {
+                            // A touch Android canceled or rejected is not a tap.
+                            if (isTap && !isCanceled(event) && (event.eventTime - tapEventTime) < longPressTimeout) {
                                 maximize()
                             } else {
                                 if (moveFreely) {
