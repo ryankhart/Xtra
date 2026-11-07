@@ -61,10 +61,10 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
     fun add(eventTime: Long, x: Float, y: Float) {
         if (!isTracking) return
         addToTracker(eventTime, x, y, MotionEvent.ACTION_MOVE)
+        updateStroke(y)
         // Only real movement counts as still moving; some screens keep reporting a resting finger, and other
         // fingers' moves report this one too.
         if (abs(x - anchorX) > jitter || abs(y - anchorY) > jitter) {
-            updateStroke(y)
             anchorX = x
             anchorY = y
             lastMoveTime = eventTime
@@ -85,7 +85,7 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
     fun finish(liftTime: Long, canceled: Boolean, firstStrokeMin: Float = touchSlop): VerticalFling {
         val tracker = tracker?.takeIf { isTracking } ?: return VerticalFling.NONE
         isTracking = false
-        if (canceled || liftTime - lastMoveTime > STOPPED_MS) {
+        if (canceled || liftTime - lastMoveTime >= STOPPED_MS) {
             return VerticalFling.NONE
         }
         tracker.computeCurrentVelocity(1000)
@@ -102,16 +102,18 @@ class VerticalFlingDetector(private val minVelocity: Float, private val touchSlo
 
     private fun updateStroke(y: Float) {
         when {
-            strokeDirection == 0 -> if (y != strokeStartY) {
+            // The first direction needs more than jitter, so a finger rolling as it lands doesn't pick it.
+            strokeDirection == 0 -> if (abs(y - strokeStartY) > jitter) {
                 strokeDirection = if (y > strokeStartY) 1 else -1
                 strokeExtremeY = y
             }
             // Further in the same direction.
             (y - strokeExtremeY) * strokeDirection > 0 -> strokeExtremeY = y
-            // Came back more than the slop: a new stroke starts at the turning point.
+            // Came back more than the slop: a new stroke starts at the turning point. It only counts as a turn if
+            // the stroke it ends was itself longer than the slop; otherwise the gesture is still on its first stroke.
             (strokeExtremeY - y) * strokeDirection > touchSlop -> {
+                if (abs(strokeExtremeY - strokeStartY) > touchSlop) strokeTurned = true
                 strokeDirection = -strokeDirection
-                strokeTurned = true
                 strokeStartY = strokeExtremeY
                 strokeExtremeY = y
             }
