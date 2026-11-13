@@ -18,4 +18,5 @@ You can find released APKs [here](https://github.com/crackededed/Xtra/releases/t
 [Xtra subreddit](https://www.reddit.com/r/XtraForTwitch)
 
 ## License
+
 Xtra is licensed under the [GNU Affero General Public License v3.0](LICENSE).

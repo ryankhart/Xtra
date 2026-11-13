@@ -1,8 +1,8 @@
 query User($id: ID, $login: String) {
-    user(id: $id, login: $login, lookupType: ALL) {
-        displayName
-        id
-        login
-        profileImageURL(width: 300)
-    }
+  user(id: $id, login: $login, lookupType: ALL) {
+    displayName
+    id
+    login
+    profileImageURL(width: 300)
+  }
 }

@@ -1,25 +1,31 @@
 query VideoMoments($id: ID, $first: Int, $after: Cursor) {
-    video(id: $id) {
-        moments(first: $first, after: $after, sort: ASC, types: [GAME_CHANGE], momentRequestType: VIDEO_CHAPTER_MARKERS) {
-            edges {
-                cursor
-                node {
-                    details {
-                        ... on GameChangeMomentDetails {
-                            game {
-                                boxArtURL
-                                displayName
-                                id
-                            }
-                        }
-                    }
-                    durationMilliseconds
-                    positionMilliseconds
-                }
+  video(id: $id) {
+    moments(
+      first: $first
+      after: $after
+      sort: ASC
+      types: [GAME_CHANGE]
+      momentRequestType: VIDEO_CHAPTER_MARKERS
+    ) {
+      edges {
+        cursor
+        node {
+          details {
+            ... on GameChangeMomentDetails {
+              game {
+                boxArtURL
+                displayName
+                id
+              }
             }
-            pageInfo {
-                hasNextPage
-            }
+          }
+          durationMilliseconds
+          positionMilliseconds
         }
+      }
+      pageInfo {
+        hasNextPage
+      }
     }
+  }
 }
