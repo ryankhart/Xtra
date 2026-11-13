@@ -24,7 +24,6 @@ import android.view.Gravity
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.RoundedCorner
-import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -108,7 +107,6 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var activePointerId = -1
     private var lastX = 0f
     private var lastY = 0f
-    private var velocityTracker: VelocityTracker? = null
     private lateinit var flingDetector: VerticalFlingDetector
     private var isTap = false
     private var tapEventTime = 0L
@@ -382,20 +380,6 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         controllerTapDetector.onTouchEvent(event)
                     }
                 } else {
-                    velocityTracker?.clear()
-                    if (velocityTracker == null) {
-                        velocityTracker = VelocityTracker.obtain()
-                    }
-                    velocityTracker?.addMovement(
-                        MotionEvent.obtain(
-                            event.downTime,
-                            event.eventTime,
-                            event.action,
-                            slidingLayout.translationX,
-                            slidingLayout.translationY,
-                            event.metaState
-                        )
-                    )
                     startTranslationX = slidingLayout.translationX
                     startTranslationY = slidingLayout.translationY
                 }
@@ -403,12 +387,27 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
             // The flick that will actually act: on the full player not while seeking, not from a status-bar swipe and
             // not from a touch the player didn't follow past the slop (that one is handed to the controls as a tap);
-            // on the mini player only a flick up, and not in "move freely" mode, where upward drags reposition it.
+            // on the mini player a flick down always dismisses it, and a flick up expands it except in "move freely"
+            // mode, where upward drags reposition it.
             fun actionableFling(fling: VerticalFling): VerticalFling = when {
                 fling == VerticalFling.NONE -> VerticalFling.NONE
                 isMaximized -> if (playerControls.progressBar.isPressed || statusBarSwipe || slidingLayout.translationY in touchSlopRange) VerticalFling.NONE else fling
+                fling == VerticalFling.DOWN -> VerticalFling.DOWN
                 fling == VerticalFling.UP && !moveFreely -> VerticalFling.UP
                 else -> VerticalFling.NONE
+            }
+
+            // Slides the mini player down off the screen and stops playback.
+            fun dismissMiniPlayer() {
+                isAnimating = true
+                slidingLayout.animate().apply {
+                    translationY(slidingLayout.translationY + slidingLayout.height)
+                    alpha(0f)
+                    setDuration(250L)
+                    start()
+                }
+                close()
+                (activity as? MainActivity)?.closePlayer()
             }
 
             // Ends the gesture. `flick` is the result of actionableFling(takeVerticalFling(event)), or NONE.
@@ -453,34 +452,17 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         }
                     }
                 } else {
-                    velocityTracker?.computeCurrentVelocity(1000)
-                    val xVelocity = velocityTracker?.xVelocity ?: 0f
-                    velocityTracker?.recycle()
-                    velocityTracker = null
+                    // How far the mini player was dragged; without a flick, the distance decides (like the full player).
+                    val draggedY = slidingLayout.translationY - startTranslationY
                     when {
                         flick == VerticalFling.UP -> maximize()
-                        xVelocity > 1500 -> {
-                            isAnimating = true
-                            slidingLayout.animate().apply {
-                                translationX(slidingLayout.translationX + (slidingLayout.width * slidingLayout.scaleX))
-                                setDuration(250L)
-                                start()
-                            }
-                            close()
-                            (activity as? MainActivity)?.closePlayer()
-                        }
-                        xVelocity < -1500 -> {
-                            isAnimating = true
-                            slidingLayout.animate().apply {
-                                translationX(slidingLayout.translationX - (slidingLayout.width * slidingLayout.scaleX))
-                                setDuration(250L)
-                                start()
-                            }
-                            close()
-                            (activity as? MainActivity)?.closePlayer()
-                        }
+                        flick == VerticalFling.DOWN -> dismissMiniPlayer()
                         else -> {
                             if (isTap && (event.eventTime - tapEventTime) < longPressTimeout) {
+                                maximize()
+                            } else if (!moveFreely && draggedY > playerLayout.height * slidingLayout.scaleY / 2) {
+                                dismissMiniPlayer()
+                            } else if (!moveFreely && -draggedY > slidingLayout.height / 5) {
                                 maximize()
                             } else {
                                 if (moveFreely) {
@@ -600,23 +582,17 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                         val y = event.getY(pointerIndex) * slidingLayout.scaleY
                                         val translationX = x - lastX
                                         val translationY = y - lastY
-                                        slidingLayout.translationX += translationX
+                                        // Up and down follow the finger (flick or drag up to expand, down to dismiss);
+                                        // sideways only in "move freely" mode, where the player can be placed anywhere.
                                         if (moveFreely) {
-                                            slidingLayout.translationY += translationY
+                                            slidingLayout.translationX += translationX
                                         }
+                                        slidingLayout.translationY += translationY
                                         lastX = x - translationX
                                         lastY = y - translationY
-                                        velocityTracker?.addMovement(
-                                            MotionEvent.obtain(
-                                                event.downTime,
-                                                event.eventTime,
-                                                event.action,
-                                                slidingLayout.translationX,
-                                                slidingLayout.translationY,
-                                                event.metaState
-                                            )
-                                        )
-                                        if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange)) {
+                                        // The player doesn't move sideways in normal mode, so there translationX is the
+                                        // finger's sideways travel since touching down: a sideways swipe isn't a tap.
+                                        if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange || translationX !in touchSlopRange)) {
                                             isTap = false
                                         }
                                     }
@@ -2480,8 +2456,6 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         if (::flingDetector.isInitialized) {
             flingDetector.recycle()
         }
-        velocityTracker?.recycle()
-        velocityTracker = null
         _binding = null
     }
 
