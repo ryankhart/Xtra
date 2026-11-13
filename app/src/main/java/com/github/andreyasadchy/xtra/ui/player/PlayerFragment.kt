@@ -114,6 +114,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var startTranslationX = 0f
     private var startTranslationY = 0f
     private var miniSidewaysTravel = 0f
+    private var miniSidewaysBase = 0f
     private var statusBarSwipe = false
     private var chatStatusBarSwipe = false
     private var isAnimating = false
@@ -385,6 +386,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     startTranslationX = slidingLayout.translationX
                     startTranslationY = slidingLayout.translationY
                     miniSidewaysTravel = 0f
+                    miniSidewaysBase = 0f
                 }
             }
 
@@ -400,7 +402,8 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 else -> VerticalFling.NONE
             }
 
-            // How far down (from the corner) a slow drag must take the mini player to dismiss it: half its displayed height.
+            // How far down (from where the touch started) a slow drag must take the mini player to dismiss it: half its
+            // displayed height.
             fun miniDismissDistance(): Float = playerLayout.height * slidingLayout.scaleY / 2
 
             // Slides the mini player down off the screen and stops playback.
@@ -459,11 +462,13 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     }
                 } else {
                     // How far the mini player was dragged; without a flick, the distance decides (like the full player).
-                    // A canceled drag (the system took the touch away) commits nothing: it snaps back to the corner.
-                    val draggedY = if (event.actionMasked == MotionEvent.ACTION_CANCEL) 0f else slidingLayout.translationY - startTranslationY
+                    // Measured from where the touch started. A canceled drag (the system took the touch away, or
+                    // rejected it as a palm) commits nothing: it snaps back to the corner.
+                    val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
+                    val draggedY = if (canceled) 0f else slidingLayout.translationY - startTranslationY
                     when {
                         flick == VerticalFling.UP -> maximize()
-                        // In normal mode a flick down only dismisses from at or below the corner: one that just
+                        // In normal mode a flick down only dismisses from at or below where the touch started: one that just
                         // brings back a player dragged up (a change of mind) snaps it back instead.
                         flick == VerticalFling.DOWN && (moveFreely || draggedY >= 0f) -> dismissMiniPlayer()
                         else -> {
@@ -598,17 +603,20 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                             slidingLayout.translationX += translationX
                                         } else {
                                             // The player doesn't move sideways here, so translationX is the finger's
-                                            // sideways travel since touching down.
-                                            miniSidewaysTravel = translationX
+                                            // sideways travel since touching down (plus that of fingers it took over from).
+                                            miniSidewaysTravel = miniSidewaysBase + translationX
                                         }
                                         slidingLayout.translationY += translationY
                                         lastX = x - translationX
                                         lastY = y - translationY
                                         if (!moveFreely) {
                                             // Fade as it's pulled down, so it's clear letting go will dismiss it
-                                            // (0.75 at the dismiss distance, never below 0.5).
+                                            // (0.75 at the dismiss distance, never below 0.5). No fade while the
+                                            // finger has gone more sideways than down: that release snaps back.
                                             val pulledDown = slidingLayout.translationY - startTranslationY
-                                            slidingLayout.alpha = 1f - (pulledDown / (4 * miniDismissDistance())).coerceIn(0f, 0.5f)
+                                            slidingLayout.alpha = if (pulledDown > abs(miniSidewaysTravel)) {
+                                                1f - (pulledDown / (4 * miniDismissDistance())).coerceIn(0f, 0.5f)
+                                            } else 1f
                                         }
                                         if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange)) {
                                             isTap = false
@@ -637,6 +645,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                             newId = id
                                             lastX = x * slidingLayout.scaleX
                                             lastY = y * slidingLayout.scaleY
+                                            // Keep the sideways travel so far: the downward travel (the player's
+                                            // position) carries over too.
+                                            miniSidewaysBase = miniSidewaysTravel
                                             // Another finger takes over: start measuring its speed fresh instead of jumping between fingers.
                                             startFling(event, i)
                                             break
