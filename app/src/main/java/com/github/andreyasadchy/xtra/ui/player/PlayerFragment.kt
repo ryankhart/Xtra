@@ -12,6 +12,7 @@ import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.Bundle
@@ -413,13 +414,37 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             // displayed height.
             fun miniDismissDistance(): Float = playerLayout.height * slidingLayout.scaleY / 2
 
+            // While the mini player is pulled down (normal mode): fade it, so it's clear letting go will dismiss it
+            // (0.75 at the dismiss distance, never below 0.5), and tick each time letting go switches between
+            // snapping back and dismissing. No fade while the finger has gone more sideways than down, since that
+            // release snaps back; the fade eases in past that point so a wobbling thumb doesn't flicker it.
+            fun updateMiniPullFeedback() {
+                val pulledDown = slidingLayout.translationY - startTranslationY
+                val downLead = pulledDown - abs(miniSidewaysTravel)
+                val fadeDistance = min(pulledDown, 2 * downLead)
+                slidingLayout.alpha = 1f - (fadeDistance / (4 * miniDismissDistance())).coerceIn(0f, 0.5f)
+                syncMiniDim()
+                val wouldDismiss = downLead > 0f && pulledDown > miniDismissDistance()
+                if (wouldDismiss != miniPastDismiss) {
+                    miniPastDismiss = wouldDismiss
+                    dragView.performHapticFeedback(
+                        when {
+                            Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE -> HapticFeedbackConstants.CLOCK_TICK
+                            wouldDismiss -> HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE
+                            else -> HapticFeedbackConstants.GESTURE_THRESHOLD_DEACTIVATE
+                        }
+                    )
+                }
+            }
+
             // Slides the mini player down off the screen and stops playback.
             fun dismissMiniPlayer() {
                 isAnimating = true
                 slidingLayout.animate().apply {
-                    // Twice its displayed height: enough to leave the screen from the corner, so the slide is visible
-                    // for the whole animation instead of flashing past (the fade covers anywhere else).
-                    translationY(slidingLayout.translationY + 2 * playerLayout.height * slidingLayout.scaleY)
+                    // Just far enough to leave the screen from wherever it is, so the slide stays visible for the
+                    // whole animation. The video's surface may not fade with the view, so the slide alone must hide it.
+                    val onScreen = IntArray(2).also { playerLayout.getLocationOnScreen(it) }
+                    translationY(slidingLayout.translationY + max(requireView().rootView.height - onScreen[1], 0))
                     alpha(0f)
                     setDuration(250L)
                     start()
@@ -532,6 +557,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                         translationX(0f - scaledXDiff - ((insets?.left ?: 0) * slidingLayout.scaleX) + newX)
                                         translationY(0f - scaledYDiff - ((insets?.top ?: 0) * slidingLayout.scaleY) + newY)
                                         alpha(1f)
+                                        setUpdateListener { syncMiniDim() }
                                         setDuration(250L)
                                         start()
                                     }
@@ -623,26 +649,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                         lastX = x - translationX
                                         lastY = y - translationY
                                         if (!moveFreely) {
-                                            // Fade as it's pulled down, so it's clear letting go will dismiss it
-                                            // (0.75 at the dismiss distance, never below 0.5). No fade while the
-                                            // finger has gone more sideways than down, since that release snaps back;
-                                            // the fade eases in past that point so a wobbling thumb doesn't flicker it.
-                                            val pulledDown = slidingLayout.translationY - startTranslationY
-                                            val downLead = pulledDown - abs(miniSidewaysTravel)
-                                            val fadeDistance = min(pulledDown, 2 * downLead)
-                                            slidingLayout.alpha = 1f - (fadeDistance / (4 * miniDismissDistance())).coerceIn(0f, 0.5f)
-                                            // A tick each time letting go switches between snapping back and dismissing.
-                                            val wouldDismiss = downLead > 0f && pulledDown > miniDismissDistance()
-                                            if (wouldDismiss != miniPastDismiss) {
-                                                miniPastDismiss = wouldDismiss
-                                                dragView.performHapticFeedback(
-                                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                                                        HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE
-                                                    } else {
-                                                        HapticFeedbackConstants.CLOCK_TICK
-                                                    }
-                                                )
-                                            }
+                                            updateMiniPullFeedback()
                                         }
                                         if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange)) {
                                             isTap = false
@@ -659,6 +666,11 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                             val flick = if (pointerId == activePointerId) actionableFling(takeVerticalFling(event)) else VerticalFling.NONE
                             if (flick != VerticalFling.NONE) {
                                 upAction(event, flick)
+                                activePointerId = -1
+                            } else if (pointerId == activePointerId && !isMaximized && isCanceled(event)) {
+                                // The tracked finger was rejected (e.g. a palm): its whole drag is void, so the mini
+                                // player snaps back and no other finger takes over (and inherits) that drag.
+                                upAction(event, VerticalFling.NONE)
                                 activePointerId = -1
                             } else if (pointerId == activePointerId) {
                                 var newId = -1
@@ -2225,6 +2237,20 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         }
     }
 
+    // The video is drawn on a SurfaceView, which doesn't fade with its parent's alpha, so a black overlay on the
+    // player darkens it by as much as the mini player is faded. Left as the animator's update listener on purpose:
+    // it only mirrors the current alpha.
+    private fun syncMiniDim() {
+        val playerLayout = _binding?.playerLayout ?: return
+        val dim = 1f - (_binding?.slidingLayout?.alpha ?: 1f)
+        if (dim <= 0f) {
+            playerLayout.foreground = null
+        } else {
+            val overlay = playerLayout.foreground as? ColorDrawable ?: ColorDrawable(Color.BLACK).also { playerLayout.foreground = it }
+            overlay.alpha = (dim * 255).toInt().coerceIn(0, 255)
+        }
+    }
+
     fun maximize() {
         with(binding) {
             isMaximized = true
@@ -2251,6 +2277,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 scaleX(1f)
                 scaleY(1f)
                 alpha(1f)
+                setUpdateListener { syncMiniDim() }
                 setDuration(250L)
                 setListener(
                     object : AnimatorListenerAdapter() {
