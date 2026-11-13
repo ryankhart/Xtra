@@ -1,0 +1,81 @@
+name: Fork release
+
+# Builds the fork's APK on every push to master (upstream merges from the
+# sync job, or new fork features) and publishes it as a GitHub release.
+# Upstream's own "Build" workflow is disabled in this fork.
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: fork-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout sources
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          filter: blob:none
+      - name: Setup Java
+        uses: actions/setup-java@v6
+        with:
+          java-version: "21"
+          distribution: "temurin"
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: "basic"
+      - name: Build release APK
+        run: ./gradlew assembleRelease
+      - name: Name the release
+        id: meta
+        run: |
+          version=$(sed -n 's/^ *versionName = "\(.*\)"/\1/p' app/build.gradle.kts | head -1)
+          short=$(git rev-parse --short=8 HEAD)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=fork-$version-$short" >> "$GITHUB_OUTPUT"
+          apk=$(ls app/build/outputs/apk/release/*.apk | head -1)
+          cp "$apk" "Xtra-fork-$version-$short.apk"
+          echo "apk=Xtra-fork-$version-$short.apk" >> "$GITHUB_OUTPUT"
+      - name: Release notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          prev=$(gh release list --limit 20 --json tagName --jq '[.[].tagName | select(startswith("fork-"))][0] // ""')
+          {
+            echo "Personal build of Xtra ${{ steps.meta.outputs.version }} with this fork's additions (see the README)."
+            echo
+            if [ -n "$prev" ]; then
+              echo "Changes since $prev:"
+              git log "$prev..HEAD" --no-merges --format='- %s' | head -60
+            else
+              echo "Fork additions on top of upstream:"
+              git log --no-merges --format='- %s' --author='Ryan Hart' | head -60
+            fi
+          } > notes.txt
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.meta.outputs.tag }}" "${{ steps.meta.outputs.apk }}" \
+            --title "Xtra ${{ steps.meta.outputs.version }} (fork, ${GITHUB_SHA::8})" \
+            --notes-file notes.txt --target "$GITHUB_SHA" --latest
+      - name: Report a failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create fork-pipeline --color B60205 --description "Fork release pipeline failures" 2>/dev/null || true
+          gh issue create --label fork-pipeline \
+            --title "Fork release failed for ${GITHUB_SHA::8}" \
+            --body "The fork release build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
