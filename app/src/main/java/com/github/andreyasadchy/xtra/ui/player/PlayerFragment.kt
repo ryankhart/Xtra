@@ -1161,6 +1161,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         val newY = slidingLayout.height - navBarHeight - (playerHeight * minimizedScaleY) - (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 30F, resources.displayMetrics) * minimizedScaleY)
                         slidingLayout.translationX = 0f - scaledXDiff - ((insets?.left ?: 0) * minimizedScaleX) + newX
                         slidingLayout.translationY = 0f - scaledYDiff - ((insets?.top ?: 0) * minimizedScaleY) + newY
+                        updateMiniPlayerSpace(playerHeight.toFloat(), minimizedScaleY)
                     }
                 }
                 aspectRatioFrameLayout.resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
@@ -1236,6 +1237,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                         val newY = slidingLayout.height - navBarHeight - (slidingLayout.height * minimizedScaleY) - (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 30F, resources.displayMetrics) * minimizedScaleY)
                         slidingLayout.translationX = 0f - scaledXDiff - ((insets?.left ?: 0) * minimizedScaleX) + newX
                         slidingLayout.translationY = 0f - scaledYDiff - ((insets?.top ?: 0) * minimizedScaleY) + newY
+                        updateMiniPlayerSpace(slidingLayout.height.toFloat(), minimizedScaleY)
                     }
                 }
                 aspectRatioFrameLayout.resizeMode = resizeMode
@@ -1864,6 +1866,17 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
         }
     }
 
+    /**
+     * Lets lists scroll past their last item by the minimized player's height, its gap above the bottom bar and some padding.
+     */
+    private fun updateMiniPlayerSpace(playerHeight: Float, minimizedScaleY: Float) {
+        if (!isMaximized) {
+            val gap = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 30F, resources.displayMetrics) * minimizedScaleY
+            val padding = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 8F, resources.displayMetrics)
+            (activity as? MainActivity)?.setMiniPlayerSpace((playerHeight * minimizedScaleY + gap + padding).toInt())
+        }
+    }
+
     fun getIsPortrait() = isPortrait
 
     fun reloadEmotes() = chatFragment?.reloadEmotes()
@@ -1983,6 +1996,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             if (isInPictureInPictureMode) {
                 if (!isMaximized) {
                     isMaximized = true
+                    (activity as? MainActivity)?.setMiniPlayerSpace(0)
                     requireActivity().onBackPressedDispatcher.addCallback(this@PlayerFragment, backPressedCallback)
                     if (playbackService?.type == BasePlaybackService.STREAM && chatFragment?.emoteMenuIsVisible() == true) {
                         chatFragment?.toggleBackPressedCallback(true)
@@ -2042,6 +2056,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 }
                 val newX = slidingLayout.width - (insets?.right ?: 0) - (playerWidth * minimizedScaleX) - (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 20F, resources.displayMetrics) * minimizedScaleX)
                 val newY = slidingLayout.height - navBarHeight - (playerLayout.height * minimizedScaleY) - (TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, 30F, resources.displayMetrics) * minimizedScaleY)
+                updateMiniPlayerSpace(playerLayout.height.toFloat(), minimizedScaleY)
                 slidingLayout.animate().apply {
                     translationX(0f - scaledXDiff - ((insets?.left ?: 0) * minimizedScaleX) + newX)
                     translationY(0f - scaledYDiff - ((insets?.top ?: 0) * minimizedScaleY) + newY)
@@ -2090,6 +2105,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     fun maximize() {
         with(binding) {
             isMaximized = true
+            (activity as? MainActivity)?.setMiniPlayerSpace(0)
             requireActivity().onBackPressedDispatcher.addCallback(this@PlayerFragment, backPressedCallback)
             if (playbackService?.type == BasePlaybackService.STREAM && chatFragment?.emoteMenuIsVisible() == true) {
                 chatFragment?.toggleBackPressedCallback(true)
@@ -2370,6 +2386,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
 
     override fun onDestroyView() {
         super.onDestroyView()
+        (activity as? MainActivity)?.setMiniPlayerSpace(0)
         _binding = null
     }
 

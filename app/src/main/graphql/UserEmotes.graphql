@@ -1,15 +1,15 @@
 query UserEmotes {
-    user {
-        emoteSets {
-            emotes {
-                id
-                owner {
-                    id
-                }
-                setID
-                token
-                type
-            }
+  user {
+    emoteSets {
+      emotes {
+        id
+        owner {
+          id
         }
+        setID
+        token
+        type
+      }
     }
+  }
 }
