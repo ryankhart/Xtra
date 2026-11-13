@@ -21,6 +21,7 @@ import android.text.format.DateUtils
 import android.util.TypedValue
 import android.view.GestureDetector
 import android.view.Gravity
+import android.view.HapticFeedbackConstants
 import android.view.LayoutInflater
 import android.view.MotionEvent
 import android.view.RoundedCorner
@@ -85,6 +86,7 @@ import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlin.math.abs
 import kotlin.math.max
+import kotlin.math.min
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Instant
 
@@ -115,6 +117,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
     private var startTranslationY = 0f
     private var miniSidewaysTravel = 0f
     private var miniSidewaysBase = 0f
+    private var miniPastDismiss = false
     private var statusBarSwipe = false
     private var chatStatusBarSwipe = false
     private var isAnimating = false
@@ -350,16 +353,19 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                 return y <= max(100, zone)
             }
 
+            // A touch the system took away. FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected,
+            // e.g. a palm, lifted as a pointer-up.
+            @SuppressLint("InlinedApi")
+            fun isCanceled(event: MotionEvent): Boolean =
+                event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
+
             // Ends the tracked finger's gesture and returns its flick, if any.
             fun takeVerticalFling(event: MotionEvent): VerticalFling {
                 if (!flingDetector.isTracking) return VerticalFling.NONE
                 // Any positions bundled into the lift event are real movement; only its own point is left out.
                 event.findPointerIndex(activePointerId).takeIf { it != -1 }?.let { addFlingSamples(event, it, includeCurrent = false) }
                 endTapIfMoved()
-                // FLAG_CANCELED (API 33+, never set before) marks a touch Android rejected, e.g. a palm, lifted as a pointer-up.
-                @SuppressLint("InlinedApi")
-                val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
-                return flingDetector.finish(event.eventTime, canceled)
+                return flingDetector.finish(event.eventTime, isCanceled(event))
             }
 
             // Records the tracked finger on every event, including other fingers landing or lifting, so its
@@ -387,6 +393,7 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     startTranslationY = slidingLayout.translationY
                     miniSidewaysTravel = 0f
                     miniSidewaysBase = 0f
+                    miniPastDismiss = false
                 }
             }
 
@@ -410,7 +417,9 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
             fun dismissMiniPlayer() {
                 isAnimating = true
                 slidingLayout.animate().apply {
-                    translationY(slidingLayout.translationY + slidingLayout.height)
+                    // Twice its displayed height: enough to leave the screen from the corner, so the slide is visible
+                    // for the whole animation instead of flashing past (the fade covers anywhere else).
+                    translationY(slidingLayout.translationY + 2 * playerLayout.height * slidingLayout.scaleY)
                     alpha(0f)
                     setDuration(250L)
                     start()
@@ -464,17 +473,21 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                     // How far the mini player was dragged; without a flick, the distance decides (like the full player).
                     // Measured from where the touch started. A canceled drag (the system took the touch away, or
                     // rejected it as a palm) commits nothing: it snaps back to the corner.
-                    val canceled = event.actionMasked == MotionEvent.ACTION_CANCEL || (event.flags and MotionEvent.FLAG_CANCELED) != 0
-                    val draggedY = if (canceled) 0f else slidingLayout.translationY - startTranslationY
+                    val draggedY = if (isCanceled(event)) 0f else slidingLayout.translationY - startTranslationY
+                    // In normal mode the finger must have gone more down than sideways for any dismiss (flick, drag,
+                    // and the fade agree): a sideways swipe with a downward curl at the end snaps back.
+                    val wentDown = draggedY >= 0f && draggedY > abs(miniSidewaysTravel)
                     when {
+                        // Expanding is harmless, so a flick up expands even after pulling down (no change-of-mind
+                        // rule, unlike the flick down below).
                         flick == VerticalFling.UP -> maximize()
-                        // In normal mode a flick down only dismisses from at or below where the touch started: one that just
-                        // brings back a player dragged up (a change of mind) snaps it back instead.
-                        flick == VerticalFling.DOWN && (moveFreely || draggedY >= 0f) -> dismissMiniPlayer()
+                        // A flick down that just brings back a player dragged up (a change of mind) snaps it back.
+                        flick == VerticalFling.DOWN && (moveFreely || wentDown) -> dismissMiniPlayer()
                         else -> {
-                            if (flick == VerticalFling.NONE && isTap && (event.eventTime - tapEventTime) < longPressTimeout) {
+                            // A flick always clears isTap, and a flick that didn't act above snaps back.
+                            if (isTap && (event.eventTime - tapEventTime) < longPressTimeout) {
                                 maximize()
-                            } else if (flick == VerticalFling.NONE && !moveFreely && draggedY > miniDismissDistance() && draggedY > abs(miniSidewaysTravel)) {
+                            } else if (flick == VerticalFling.NONE && !moveFreely && wentDown && draggedY > miniDismissDistance()) {
                                 dismissMiniPlayer()
                             } else if (flick == VerticalFling.NONE && !moveFreely && -draggedY > slidingLayout.height / 5) {
                                 maximize()
@@ -612,11 +625,24 @@ abstract class PlayerFragment : BaseNetworkFragment(), RadioButtonDialogFragment
                                         if (!moveFreely) {
                                             // Fade as it's pulled down, so it's clear letting go will dismiss it
                                             // (0.75 at the dismiss distance, never below 0.5). No fade while the
-                                            // finger has gone more sideways than down: that release snaps back.
+                                            // finger has gone more sideways than down, since that release snaps back;
+                                            // the fade eases in past that point so a wobbling thumb doesn't flicker it.
                                             val pulledDown = slidingLayout.translationY - startTranslationY
-                                            slidingLayout.alpha = if (pulledDown > abs(miniSidewaysTravel)) {
-                                                1f - (pulledDown / (4 * miniDismissDistance())).coerceIn(0f, 0.5f)
-                                            } else 1f
+                                            val downLead = pulledDown - abs(miniSidewaysTravel)
+                                            val fadeDistance = min(pulledDown, 2 * downLead)
+                                            slidingLayout.alpha = 1f - (fadeDistance / (4 * miniDismissDistance())).coerceIn(0f, 0.5f)
+                                            // A tick each time letting go switches between snapping back and dismissing.
+                                            val wouldDismiss = downLead > 0f && pulledDown > miniDismissDistance()
+                                            if (wouldDismiss != miniPastDismiss) {
+                                                miniPastDismiss = wouldDismiss
+                                                dragView.performHapticFeedback(
+                                                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                                                        HapticFeedbackConstants.GESTURE_THRESHOLD_ACTIVATE
+                                                    } else {
+                                                        HapticFeedbackConstants.CLOCK_TICK
+                                                    }
+                                                )
+                                            }
                                         }
                                         if (isTap && ((startTranslationX - slidingLayout.translationX) !in touchSlopRange || (startTranslationY - slidingLayout.translationY) !in touchSlopRange)) {
                                             isTap = false
